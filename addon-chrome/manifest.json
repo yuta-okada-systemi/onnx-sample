@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Issue Semantic Search",
+  "description": "Synchronize GitHub issues locally and search them by semantic similarity.",
+  "version": "0.1.0",
+  "permissions": [
+    "sidePanel",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://api.github.com/*",
+    "https://huggingface.co/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "GitHub Issue Search"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
