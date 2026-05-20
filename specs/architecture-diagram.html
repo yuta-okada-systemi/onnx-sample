@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Issue Search Architecture Map</title>
+    <!-- Tailwind CSS for Modern Styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                        mono: ['Space Grotesk', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            bg: '#05070f',
+                            card: '#0f172a',
+                            border: '#1e293b',
+                            accent: '#deff9a',
+                            accentDim: 'rgba(222, 255, 154, 0.15)',
+                            textMuted: '#94a3b8',
+                            highlight: '#38bdf8',
+                            onnx: '#f97316', /* Gold-Orange for ONNX Runtime */
+                            onnxDim: 'rgba(249, 115, 22, 0.15)'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #05070f;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(222, 255, 154, 0.02) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(249, 115, 22, 0.02) 0%, transparent 50%),
+                radial-gradient(circle at 90% 80%, rgba(56, 189, 248, 0.03) 0%, transparent 40%);
+        }
+        
+        /* Connection Flow Animations */
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -40;
+            }
+        }
+        .flow-line {
+            stroke-dasharray: 8, 4;
+            transition: stroke 0.4s, stroke-width 0.4s, opacity 0.4s;
+            opacity: 0.3; /* 初期（未選択）状態での視認性を担保 */
+            stroke: #475569;
+        }
+        .flow-active-sync {
+            stroke: #deff9a !important;
+            animation: dash 1.2s linear infinite;
+            stroke-width: 4px !important;
+            opacity: 1 !important;
+        }
+        .flow-active-search {
+            stroke: #38bdf8 !important;
+            animation: dash 1.2s linear infinite;
+            stroke-width: 4px !important;
+            opacity: 1 !important;
+        }
+        .flow-active-onnx {
+            stroke: #f97316 !important;
+            animation: dash 0.8s linear infinite;
+            stroke-width: 5px !important;
+            opacity: 1 !important;
+        }
+
+        /* 活性化したフロー追跡時、関係ない他の静的線を極限までフェードアウトさせる */
+        .has-active-step .flow-line:not(.flow-active-sync):not(.flow-active-search):not(.flow-active-onnx) {
+            opacity: 0.04 !important;
+            stroke: #1e293b !important;
+        }
+
+        /* Interactive Component Hover and Active states */
+        .component-card {
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        /* Focus state classes managed by JavaScript */
+        .comp-focus {
+            opacity: 1 !important;
+            transform: scale(1.03) translateY(-4px);
+            z-index: 30 !important;
+        }
+        .comp-focus-onnx {
+            opacity: 1 !important;
+            transform: scale(1.05) translateY(-4px);
+            z-index: 40 !important;
+            border-color: #f97316 !important;
+        }
+        .comp-dimmed {
+            opacity: 0.15 !important;
+            filter: grayscale(60%) blur(0.5px);
+            transform: scale(0.97);
+        }
+        
+        /* Active Timeline step styling */
+        .step-active {
+            border-color: #f97316 !important;
+            background-color: rgba(249, 115, 22, 0.08) !important;
+            transform: translateX(4px);
+            box-shadow: 0 4px 20px -5px rgba(249, 115, 22, 0.2);
+        }
+    </style>
+</head>
+<body class="text-slate-100 font-sans min-height-screen p-4 md:p-8 flex flex-col select-none justify-center">
+
+    <!-- Main Container (ヘッダー/フッターが完全に削除されたすっきりしたメイン領域) -->
+    <main class="max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 overflow-hidden">
+        
+        <!-- Left Section: Interactive Diagram Map (Col 8) -->
+        <div class="lg:col-span-8 bg-brand-card/20 rounded-3xl border border-brand-border p-6 relative overflow-hidden backdrop-blur-md flex flex-col justify-between">
+            
+            <!-- Flow Indicators + Controls Header (ステータスバーのなかに切り替えコントロールを綺麗に統合) -->
+            <div class="flex justify-between items-center mb-4 bg-brand-bg/80 px-4 py-2 rounded-xl border border-brand-border">
+                <div class="text-xs font-mono text-brand-textMuted flex items-center gap-3">
+                    <span class="text-brand-onnx font-bold" id="current-trace-step">システム全体概要 (未選択)</span>
+                    <div class="hidden md:flex gap-3 border-l border-brand-border pl-3">
+                        <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-brand-accent inline-block"></span> 同期ライン</div>
+                        <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-brand-highlight inline-block"></span> 検索ライン</div>
+                        <div class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-brand-onnx inline-block animate-ping"></span> ONNX推論</div>
+                    </div>
+                </div>
+                <!-- 同期・検索フェーズの切り替えコントロール -->
+                <div class="flex items-center gap-1.5 bg-brand-card p-0.5 rounded-lg border border-brand-border scale-95">
+                    <button id="btn-sync" onclick="activateFlow('sync')" class="px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all flex items-center gap-1 bg-brand-accent text-brand-bg shadow-md">
+                        <i class="fa-solid fa-rotate"></i> 同期
+                    </button>
+                    <button id="btn-search" onclick="activateFlow('search')" class="px-2.5 py-1 rounded-md text-[11px] font-semibold text-brand-textMuted hover:text-white transition-all flex items-center gap-1">
+                        <i class="fa-solid fa-magnifying-glass"></i> 検索
+                    </button>
+                </div>
+            </div>
+
+            <!-- The Chrome Sandbox Container -->
+            <div class="border-2 border-dashed border-slate-700/50 rounded-2xl p-6 pt-12 relative bg-brand-bg/50 flex-grow">
+                <div class="absolute -top-3 left-6 px-4 py-0.5 bg-slate-800 text-slate-300 rounded-full border border-slate-700 text-xs font-mono flex items-center gap-2">
+                    <i class="fa-brands fa-chrome text-brand-highlight"></i> Chrome Sandbox
+                </div>
+
+                <!-- SVG Connection Lines -->
+                <svg class="absolute inset-0 w-full h-full pointer-events-none" style="z-index: 1;" id="connections-svg">
+                    <!-- 1. SidePanel <--> background (Message Passing) -->
+                    <path id="line-panel-background" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+                    
+                    <!-- 2. Sync Manager -> GitHub API -->
+                    <path id="line-sync-github" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+                    
+                    <!-- 3. Model Loader -> HF CDN -->
+                    <path id="line-loader-hf" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+
+                    <!-- 4. Sync Manager -> IndexedDB (via background) -->
+                    <path id="line-sync-db" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+
+                    <!-- 5. Search Engine <--> IndexedDB -->
+                    <path id="line-search-db" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+
+                    <!-- 6. Model Loader <--> Search Engine / Sync Manager (Local Embedding pipeline) -->
+                    <path id="line-manager-loader" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+                    <path id="line-search-loader" d="M 0 0" fill="none" stroke-width="2" class="flow-line" />
+                </svg>
+
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-6 relative" style="z-index: 2;">
+                    
+                    <!-- 1. Side Panel Component (popup.html) -->
+                    <div id="card-sidepanel" onclick="selectComponent('sidepanel')" class="component-card md:col-span-4 bg-brand-card/90 border border-brand-border p-5 rounded-xl cursor-pointer">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-xs font-mono text-brand-highlight bg-brand-highlight/10 px-2.5 py-1 rounded-md">UI (popup.html)</span>
+                            <i class="fa-solid fa-window-restore text-brand-highlight text-lg"></i>
+                        </div>
+                        <h3 class="text-lg font-bold font-mono">Side Panel</h3>
+                        <p class="text-[11px] text-brand-textMuted mt-1 mb-4">popup.js</p>
+                        
+                        <div class="space-y-2">
+                            <div id="node-user-input" class="p-2 bg-brand-bg rounded-lg border border-brand-border text-xs flex items-center justify-between transition-colors">
+                                <span>1. ユーザー入力 / 検索</span>
+                                <i class="fa-solid fa-keyboard text-brand-highlight"></i>
+                            </div>
+                            <div id="node-ui-render" class="p-2 bg-brand-bg rounded-lg border border-brand-border text-xs flex items-center justify-between transition-colors">
+                                <span>9. ハイブリッド結果表示</span>
+                                <i class="fa-solid fa-list-ol text-emerald-400"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Spacer -->
+                    <div class="hidden md:block md:col-span-1"></div>
+
+                    <!-- 2. Background Service Worker (background.js) -->
+                    <div id="card-background" onclick="selectComponent('background')" class="component-card md:col-span-7 bg-brand-card/90 border border-brand-border p-5 rounded-xl cursor-pointer relative">
+                        <div class="flex items-center justify-between mb-4">
+                            <span class="text-xs font-mono text-purple-400 bg-purple-400/10 px-2.5 py-1 rounded-md">Service Worker (background.js)</span>
+                            <i class="fa-solid fa-gears text-purple-400 text-lg"></i>
+                        </div>
+                        <h3 class="text-lg font-bold font-mono mb-4">Background Script</h3>
+                        
+                        <div class="grid grid-cols-1 gap-3">
+                            <!-- Sync Manager -->
+                            <div id="sub-sync" class="p-3 bg-brand-bg rounded-lg border border-brand-border flex items-center justify-between transition-all duration-300">
+                                <div>
+                                    <h4 class="text-xs font-bold font-mono">Sync Manager</h4>
+                                    <p class="text-[10px] text-brand-textMuted">2. GitHub API通信 & データ取得</p>
+                                </div>
+                                <i class="fa-solid fa-cloud-arrow-down text-brand-accent"></i>
+                            </div>
+
+                            <!-- Model Loader (ONNX Runtime / Transformers.js) - CORE EMBEDDING CRITICAL HIGHLIGHT -->
+                            <div id="sub-model" class="p-3 bg-brand-bg rounded-lg border border-brand-border flex items-center justify-between relative overflow-hidden transition-all duration-300">
+                                <div class="absolute -right-4 -bottom-4 text-brand-onnx/10 text-6xl font-mono select-none font-bold">ONNX</div>
+                                <div class="relative z-10">
+                                    <div class="flex items-center gap-1.5">
+                                        <h4 class="text-xs font-bold font-mono text-white">Model Loader (ONNX Runtime)</h4>
+                                        <span class="px-1.5 py-0.5 text-[8px] bg-brand-onnx text-white rounded font-bold">CORE ENGINE</span>
+                                    </div>
+                                    <p class="text-[10px] text-brand-textMuted">5. モデルDL / 6. 多言語埋め込み(WASM)</p>
+                                </div>
+                                <i id="onnx-brain-icon" class="fa-solid fa-brain text-brand-onnx text-xl animate-pulse relative z-10"></i>
+                            </div>
+
+                            <!-- Search Engine -->
+                            <div id="sub-search" class="p-3 bg-brand-bg rounded-lg border border-brand-border flex items-center justify-between transition-all duration-300">
+                                <div>
+                                    <h4 class="text-xs font-bold font-mono">Search Engine</h4>
+                                    <p class="text-[10px] text-brand-textMuted">7. BM25 + Semantic 検索 / 8. RRF統合</p>
+                                </div>
+                                <i class="fa-solid fa-filter-list text-brand-highlight"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Part: Local IndexedDB -->
+                <div class="mt-6 grid grid-cols-1 md:grid-cols-12 gap-6" style="z-index: 2;">
+                    <div class="hidden md:block md:col-span-2"></div>
+                    
+                    <div id="card-db" onclick="selectComponent('database')" class="component-card md:col-span-8 bg-brand-card/90 border border-brand-border p-4 rounded-xl cursor-pointer">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-xs font-mono text-emerald-400 bg-emerald-400/10 px-2.5 py-1 rounded-md">Local Storage</span>
+                            <i class="fa-solid fa-database text-emerald-400 text-lg"></i>
+                        </div>
+                        <h3 class="text-base font-bold font-mono text-center">3. IndexedDB (Local Store)</h3>
+                        
+                        <div class="grid grid-cols-2 gap-3 mt-3">
+                            <div class="p-2 bg-brand-bg rounded-lg border border-brand-border text-center">
+                                <span class="block text-[9px] text-brand-textMuted">Store Name</span>
+                                <span class="text-xs font-bold font-mono text-emerald-300">"issues"</span>
+                            </div>
+                            <div class="p-2 bg-brand-bg rounded-lg border border-brand-border text-center">
+                                <span class="block text-[9px] text-brand-textMuted">保存されるデータ</span>
+                                <span class="text-xs font-bold text-slate-300">メタ情報 + labels + ベクトル</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="hidden md:block md:col-span-2"></div>
+                </div>
+            </div>
+
+            <!-- External Entities (GitHub API & HF CDN) -->
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- GitHub API -->
+                <div id="card-github" onclick="selectComponent('github')" class="component-card border border-brand-border p-4 rounded-xl flex items-center gap-4 cursor-pointer bg-brand-card/40">
+                    <div class="w-12 h-12 rounded-lg bg-black flex items-center justify-center border border-brand-border text-2xl">
+                        <i class="fa-brands fa-github text-white"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold font-mono text-sm">GitHub REST API</h4>
+                        <p class="text-xs text-brand-textMuted">Issues Data Provider</p>
+                    </div>
+                </div>
+
+                <!-- HuggingFace CDN -->
+                <div id="card-hf" onclick="selectComponent('hf')" class="component-card border border-brand-border p-4 rounded-xl flex items-center gap-4 cursor-pointer bg-brand-card/40">
+                    <div class="w-12 h-12 rounded-lg bg-black flex items-center justify-center border border-brand-border text-2xl">
+                        <span class="text-xl">🤗</span>
+                    </div>
+                    <div>
+                        <h4 class="font-bold font-mono text-sm">Hugging Face CDN</h4>
+                        <p class="text-[10px] text-brand-textMuted font-mono">paraphrase-multilingual-MiniLM-L12-v2</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Section: Data Flow Timeline (Col 4) -->
+        <div class="lg:col-span-4 flex flex-col gap-6">
+            
+            <!-- Step-by-Step Data Flow Controller -->
+            <div class="bg-brand-card/80 border border-brand-border rounded-2xl p-5 flex flex-col h-full">
+                <div class="flex items-center justify-between mb-4 border-b border-brand-border pb-3">
+                    <h3 class="text-sm font-mono font-bold text-brand-onnx uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-route"></i> フロー
+                    </h3>
+                    <span class="text-[10px] text-brand-textMuted bg-brand-bg px-2.5 py-0.5 rounded border border-brand-border font-medium">クリックでトレース / Wクリックで解除</span>
+                </div>
+
+                <!-- Timeline Steps -->
+                <div class="space-y-2.5 overflow-y-auto max-h-[460px] pr-1">
+                    
+                    <!-- Step 1 -->
+                    <div onclick="selectStep(1)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-1" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">1</span>
+                            <h4 class="font-bold font-mono text-slate-200">ユーザー入力設定</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">リポジトリURL、PAT（アクセストークン）をSide Panelに入力して同期開始。</p>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div onclick="selectStep(2)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-2" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">2</span>
+                            <h4 class="font-bold font-mono text-brand-accent">GitHub API通信</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">Sync ManagerがLinkヘッダーを基にページネーションを解析、Issueを全件取得。</p>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div onclick="selectStep(3)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-3" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">3</span>
+                            <h4 class="font-bold font-mono text-emerald-400">IndexedDB 保存</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">取得した生のIssueデータとラベル情報をIndexedDBのストア"issues"へ保存。</p>
+                    </div>
+
+                    <!-- Step 4 -->
+                    <div onclick="selectStep(4)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-4" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">4</span>
+                            <h4 class="font-bold font-mono text-slate-200">ユーザー検索クエリ入力</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">Side Panel of 検索ボックスから検索文字列を入力。popup.jsが常時監視。</p>
+                    </div>
+
+                    <!-- Step 5 -->
+                    <div onclick="selectStep(5)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-5" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-onnxDim text-brand-onnx border border-brand-onnx/30 text-[10px] font-mono flex items-center justify-center font-bold">5</span>
+                            <h4 class="font-bold font-mono text-brand-onnx font-extrabold">モデルローダー初期化</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7 font-medium">Transformers.jsがHuggingFaceから日本語対応ONNXモデルをDL、キャッシュに保存。</p>
+                    </div>
+
+                    <!-- Step 6 -->
+                    <div onclick="selectStep(6)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-6" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-onnxDim text-brand-onnx border border-brand-onnx/30 text-[10px] font-mono flex items-center justify-center font-bold">6</span>
+                            <h4 class="font-bold font-mono text-brand-onnx font-extrabold">多言語埋め込み生成（WASM）</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7 font-medium">ONNX Runtime Webでクエリ（日本語・英語等）を384次元の高精度な多言語表現ベクトルへ変換。</p>
+                    </div>
+
+                    <!-- Step 7 -->
+                    <div onclick="selectStep(7)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-7" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">7</span>
+                            <h4 class="font-bold font-mono text-brand-highlight">Search Engine 駆動</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">キーワード一致度を測るBM25字句計算と、ベクトルコサイン類似度を並行実行。</p>
+                    </div>
+
+                    <!-- Step 8 -->
+                    <div onclick="selectStep(8)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-8" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">8</span>
+                            <h4 class="font-bold font-mono text-brand-highlight">RRF（相互ランク融合）統合</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">BM25のランクとSemanticの類似度ランクをRRFアルゴリズムで統合し並べ替え。</p>
+                    </div>
+
+                    <!-- Step 9 -->
+                    <div onclick="selectStep(9)" ondblclick="resetToDefaultState(); event.stopPropagation();" id="step-9" class="p-2.5 bg-brand-bg rounded-xl border border-brand-border cursor-pointer transition-all hover:border-brand-onnx/50 text-xs">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300">9</span>
+                            <h4 class="font-bold font-mono text-slate-200">UI 結果表示</h4>
+                        </div>
+                        <p class="text-[11px] text-brand-textMuted pl-7">Side Panelにリアルタイムランキング結果と、対応するLabelタグをバッジで表示。</p>
+                    </div>
+
+                </div>
+
+                <!-- Live Explanation Panel below timeline -->
+                <div id="live-explanation" class="mt-4 p-3 bg-brand-bg rounded-xl border border-brand-border text-xs text-brand-textMuted">
+                    <span class="text-brand-onnx font-bold font-mono">💡 ONNX ENGINE FEATURE:</span><br>
+                    <span id="exp-text">モデルの計算処理はすべてONNX Runtime WebがWebAssembly（SIMD拡張）またはWebGPUを活用し、ブラウザサンドボックス内で完全ネイティブ級に高速実行されます。</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Interactive Map Logic -->
+    <script>
+        // Store current state
+        let activeStep = null; // 初期表示時は未選択
+
+        // Component Detail Text Database
+        const componentsData = {
+            sidepanel: {
+                title: "Side Panel (popup.html / popup.js)",
+                type: "UI / ユーザーインターフェース (拡張機能フロント)",
+                iconClass: "fa-solid fa-window-restore text-brand-highlight text-lg",
+                iconBgClass: "w-10 h-10 rounded-xl bg-brand-highlight/10 flex items-center justify-center",
+                content: `
+                    <p class="mb-2 text-xs"><strong>主な処理と仕様:</strong></p>
+                    <ul class="list-disc pl-5 space-y-1 text-[11px] text-brand-textMuted">
+                        <li>ユーザー設定情報（PATトークン、対象Repo）のフォーム管理。</li>
+                        <li>検索窓への文字入力をトリガーとする即時イベント。</li>
+                        <li>Service Workerへの非同期メッセージング：<code>chrome.runtime.sendMessage()</code></li>
+                        <li>IndexedDBに登録されたラベル（Labels）バッジのカラーコードに基づく自動レンダリング。</li>
+                    </ul>
+                `
+            },
+            background: {
+                title: "Background Service Worker (background.js)",
+                type: "バックグラウンドスレッド (常時動作)",
+                iconClass: "fa-solid fa-gears text-purple-400 text-lg",
+                iconBgClass: "w-10 h-10 rounded-xl bg-purple-400/10 flex items-center justify-center",
+                content: `
+                    <p class="mb-2 text-xs"><strong>バックグランド駆動の特性:</strong></p>
+                    <p class="text-xs mb-2">Service Worker内で動作するため、同期・AI推論・ローカルDBアクセスの一連のトランザクションは、非表示状態（別タブ操作中や無操作状態）でもプロセスが中断されることなく高速並列処理されます。</p>
+                    <ul class="list-disc pl-5 space-y-1 text-[11px] text-brand-textMuted">
+                        <li><strong>Sync Manager:</strong> ページネーションパースを実装し、GitHub REST APIからデータをチャンク取得。</li>
+                        <li><strong>Model Loader (ONNX Runtime):</strong> メモリ効率を最大限に高めた多言語量子化モデルをロード。</li>
+                        <li><strong>Search Engine:</strong> 完全にブラウザローカル内でのRRFアルゴリズムによる最適ランキング。</li>
+                    </ul>
+                `
+            },
+            database: {
+                title: "IndexedDB Local Store",
+                type: "ブラウザ標準 非リレーショナル型データベース",
+                iconClass: "fa-solid fa-database text-emerald-400 text-lg",
+                iconBgClass: "w-10 h-10 rounded-xl bg-emerald-400/10 flex items-center justify-center",
+                content: `
+                    <p class="mb-2 text-xs"><strong>保存するデータとスキーマ:</strong></p>
+                    <p class="text-xs mb-2">文字列としてのIssueオブジェクトだけでなく、AIが解釈するための384次元のベクトル空間（浮動小数点数の配列）をキーと紐づけてダイレクトに永続化します。</p>
+                    <pre class="p-2 bg-brand-bg rounded border border-brand-border text-[10px] font-mono overflow-x-auto text-emerald-300">
+{
+  id: "owner/repo#123",
+  title: "...",
+  html_url: "...",
+  labels: [{name: "bug", color: "fc2929"}],
+  combined_text: "Title: ... Body: ...",
+  embedding: [0.0312, -0.0142, ...]
+}</pre>
+                `
+            },
+            github: {
+                title: "GitHub REST API v3",
+                type: "外部サービス統合 API",
+                iconClass: "fa-brands fa-github text-white text-lg",
+                iconBgClass: "w-10 h-10 rounded-xl bg-black flex items-center justify-center",
+                content: `
+                    <p class="mb-2 text-xs"><strong>同期エンドポイント:</strong></p>
+                    <p class="text-xs mb-2">GitHubから全件のオープン状態のIssueを取得します。APIリクエストのヘッダー解析により、安全かつ漏れなくローカルにインポートします。</p>
+                    <div class="p-2 bg-brand-bg rounded border border-brand-border text-[10px] font-mono">
+                        GET /repos/{owner}/{repo}/issues<br>
+                        ?state=open&per_page=100
+                    </div>
+                `
+            },
+            hf: {
+                title: "Hugging Face Model CDN",
+                type: "学習済みモデル ホスティング",
+                iconClass: "fa-solid fa-face-smile text-purple-400 text-lg",
+                iconBgClass: "w-10 h-10 rounded-xl bg-purple-400/10 flex items-center justify-center",
+                content: `
+                    <p class="mb-2 text-xs"><strong>多言語アセット同期の特性:</strong></p>
+                    <p class="text-xs mb-2">多言語表記揺れに強い <code>Xenova/paraphrase-multilingual-MiniLM-L12-v2</code> ONNXモデル群を自動ダウンロードします。量子化により、日本語の高度な類似セマンティクスを解釈可能でありながら、エッジ実行に適した軽量サイズに抑えられています。</p>
+                    <ul class="list-disc pl-5 space-y-1 text-xs">
+                        <li><code>onnx/model_quantized.onnx</code> (多言語文脈対応 of 量子化済みベクトル抽出モデル)</li>
+                        <li><code>tokenizer.json</code> (日本語を含む多国籍な文字列を正しく分解する辞書)</li>
+                    </ul>
+                    <p class="text-xs mt-2 text-brand-highlight">※ 初回ダウンロードが完了するとブラウザにキャッシュされ、2回目以降は完全オフラインで動作可能です。</p>
+                `
+            }
+        };
+
+        // Select component for detailed analysis
+        function selectComponent(key) {
+            const data = componentsData[key];
+            if (!data) return;
+
+            // Highlight chosen card via explicit ring
+            const cards = document.querySelectorAll('.component-card');
+            cards.forEach(card => card.classList.remove('ring-4', 'ring-brand-highlight', 'ring-brand-accent', 'ring-brand-onnx'));
+            
+            const targetCard = document.getElementById(`card-${key}`);
+            if (targetCard) {
+                const ringColor = (key === 'sidepanel' ? 'ring-brand-highlight' : (key === 'background' ? 'ring-brand-onnx' : 'ring-brand-accent'));
+                targetCard.classList.add('ring-4', ringColor);
+            }
+        }
+
+        // Active Flow Presets
+        function activateFlow(flow) {
+            const btnSync = document.getElementById('btn-sync');
+            const btnSearch = document.getElementById('btn-search');
+            
+            if (flow === 'sync') {
+                btnSync.className = "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all flex items-center gap-1 bg-brand-accent text-brand-bg shadow-md";
+                btnSearch.className = "px-2.5 py-1 rounded-md text-[11px] font-semibold text-brand-textMuted hover:text-white transition-all flex items-center gap-1";
+                selectStep(2); // Jump to Sync API Step
+            } else {
+                btnSearch.className = "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all flex items-center gap-1 bg-brand-highlight text-brand-bg shadow-md";
+                btnSync.className = "px-2.5 py-1 rounded-md text-[11px] font-semibold text-brand-textMuted hover:text-white transition-all flex items-center gap-1";
+                selectStep(6); // Jump to Embedding Step
+            }
+        }
+
+        // Reset system diagram back to general outline view (visible for explanation)
+        function resetToDefaultState() {
+            activeStep = null;
+            document.body.classList.remove('has-active-step');
+            document.getElementById('current-trace-step').innerText = "システム全体概要 (未選択)";
+            
+            // 1. Reset timeline highlights
+            for (let i = 1; i <= 9; i++) {
+                const stepEl = document.getElementById(`step-${i}`);
+                if (stepEl) {
+                    stepEl.classList.remove('step-active');
+                    stepEl.querySelector('span').className = "w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300";
+                }
+            }
+
+            // 2. Clear all connection flow animations
+            const lines = [
+                document.getElementById('line-panel-background'),
+                document.getElementById('line-sync-github'),
+                document.getElementById('line-loader-hf'),
+                document.getElementById('line-sync-db'),
+                document.getElementById('line-search-db'),
+                document.getElementById('line-manager-loader'),
+                document.getElementById('line-search-loader')
+            ];
+            lines.forEach(l => { 
+                if (l) l.className.baseVal = "flow-line"; 
+            });
+
+            // 3. Clear focusing/dimming classes on card components
+            const allCards = document.querySelectorAll('.component-card');
+            allCards.forEach(card => {
+                card.className = card.className.replace(/\b(comp-focus|comp-focus-onnx|comp-dimmed)\b/g, '').trim();
+                card.classList.remove('ring-4', 'ring-brand-highlight', 'ring-brand-accent', 'ring-brand-onnx');
+            });
+
+            // 4. Reset internal subcomponents
+            const allSubComps = ['sub-sync', 'sub-model', 'sub-search', 'node-user-input', 'node-ui-render'];
+            allSubComps.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.style.transform = 'scale(1)';
+                    el.style.boxShadow = '';
+                    el.style.borderColor = '';
+                    el.style.backgroundColor = '';
+                }
+            });
+
+            // Reset description panel
+            document.getElementById('exp-text').innerText = "右側のフローの項目をクリックすると、対応するプロセスを視覚化できます。ダブルクリックすると、いつでもこの全表示状態にリセットされます。";
+            selectComponent('sidepanel');
+        }
+
+        // Helper to apply dimmed state across non-active component cards
+        function applyCardFocus(activeCardIds, subComponentHighlights = {}) {
+            const allCards = document.querySelectorAll('.component-card');
+            const allSubComps = ['sub-sync', 'sub-model', 'sub-search', 'node-user-input', 'node-ui-render'];
+            
+            // 1. Reset sub components styles
+            allSubComps.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    if (id === 'sub-model') {
+                        el.style.transform = 'scale(1)';
+                        el.style.boxShadow = '';
+                        el.style.borderColor = '';
+                        el.style.backgroundColor = '';
+                    } else {
+                        el.style.borderColor = '';
+                        el.style.backgroundColor = '';
+                    }
+                }
+            });
+
+            // 2. Control major card focus / dims
+            allCards.forEach(card => {
+                const id = card.id;
+                card.className = card.className.replace(/\b(comp-focus|comp-focus-onnx|comp-dimmed)\b/g, '').trim();
+                
+                if (activeCardIds.includes(id)) {
+                    if (id === 'card-background' && (activeCardIds.includes('focus-onnx'))) {
+                        card.classList.add('comp-focus-onnx');
+                    } else {
+                        card.classList.add('comp-focus');
+                    }
+                } else {
+                    card.classList.add('comp-dimmed');
+                }
+            });
+
+            // 3. Highlight sub-level components if specified (Removed glow box-shadow)
+            Object.keys(subComponentHighlights).forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    const color = subComponentHighlights[id];
+                    if (id === 'sub-model') {
+                        el.style.transform = 'scale(1.02)';
+                        el.style.boxShadow = 'none'; 
+                        el.style.borderColor = color; 
+                        el.style.backgroundColor = 'rgba(30, 41, 59, 0.9)';
+                    } else {
+                        el.style.borderColor = color;
+                        el.style.backgroundColor = 'rgba(30, 41, 59, 0.9)';
+                    }
+                }
+            });
+        }
+
+        // Interactive Step-by-Step Selection
+        function selectStep(stepNum) {
+            activeStep = stepNum;
+            document.body.classList.add('has-active-step'); // フロー追跡用の低コントラストクラス付与
+            
+            // 1. Reset timeline highlights
+            for (let i = 1; i <= 9; i++) {
+                const stepEl = document.getElementById(`step-${i}`);
+                if (stepEl) {
+                    stepEl.classList.remove('step-active');
+                    stepEl.querySelector('span').className = "w-5 h-5 rounded-full bg-brand-border text-[10px] font-mono flex items-center justify-center font-bold text-slate-300";
+                }
+            }
+
+            // Highlight current step
+            const currentStepEl = document.getElementById(`step-${stepNum}`);
+            if (currentStepEl) {
+                currentStepEl.classList.add('step-active');
+                currentStepEl.querySelector('span').className = "w-5 h-5 rounded-full bg-brand-onnx text-white text-[10px] font-mono flex items-center justify-center font-bold animate-pulse";
+                // Smooth scroll into view
+                currentStepEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+
+            // Get current step title to render in trace UI
+            const stepTitle = currentStepEl.querySelector('h4').innerText;
+            document.getElementById('current-trace-step').innerText = `${stepNum}. ${stepTitle}`;
+
+            // 2. Control Interactive SVG Flows based on the active step
+            const linePanelBg = document.getElementById('line-panel-background');
+            const lineSyncGithub = document.getElementById('line-sync-github');
+            const lineLoaderHf = document.getElementById('line-loader-hf');
+            const lineSyncDb = document.getElementById('line-sync-db');
+            const lineSearchDb = document.getElementById('line-search-db');
+            const lineManagerLoader = document.getElementById('line-manager-loader');
+            const lineSearchLoader = document.getElementById('line-search-loader');
+
+            // Reset all flows
+            const lines = [linePanelBg, lineSyncGithub, lineLoaderHf, lineSyncDb, lineSearchDb, lineManagerLoader, lineSearchLoader];
+            lines.forEach(l => { if (l) l.className.baseVal = "flow-line"; });
+
+            // Explanations text element
+            const expText = document.getElementById('exp-text');
+
+            // Set specific flow visual based on selected step
+            switch (stepNum) {
+                case 1: // User Input Settings
+                    linePanelBg.className.baseVal = "flow-line flow-active-search";
+                    expText.innerText = "Side Panelに入力された設定・同期リクエストがbackground.jsのSync Managerに向けて通知されます（メッセージパッシング）。";
+                    
+                    // Highlight Panel, Background and the specific sub-module node
+                    applyCardFocus(['card-sidepanel', 'card-background'], {
+                        'node-user-input': '#38bdf8',
+                        'sub-sync': '#deff9a'
+                    });
+                    break;
+
+                case 2: // GitHub API
+                    lineSyncGithub.className.baseVal = "flow-line flow-active-sync";
+                    expText.innerText = "Sync ManagerがGitHub REST APIと接続。APIの制限にかからないよう、ヘッダー情報を解析しながらページネーションループを開始します。";
+                    
+                    applyCardFocus(['card-background', 'card-github'], {
+                        'sub-sync': '#deff9a'
+                    });
+                    break;
+
+                case 3: // IndexedDB Save
+                    lineSyncDb.className.baseVal = "flow-line flow-active-sync";
+                    expText.innerText = "取得したIssueデータを生のJSONオブジェクトのまま、Labelタグ情報（Badge描画用）を含めてIndexedDBにバルク（一括）保存します。";
+                    
+                    applyCardFocus(['card-background', 'card-db'], {
+                        'sub-sync': '#deff9a'
+                    });
+                    break;
+
+                case 4: // Search Query Input
+                    linePanelBg.className.baseVal = "flow-line flow-active-search";
+                    expText.innerText = "ユーザーがキーボードで文字を打つたびに検索クエリが取得され、Backgroundの検索処理にイベントが即座に送られます。";
+                    
+                    applyCardFocus(['card-sidepanel', 'card-background'], {
+                        'node-user-input': '#38bdf8',
+                        'sub-search': '#38bdf8'
+                    });
+                    break;
+
+                case 5: // Model Loader Initialization (HF CDN Connection)
+                    lineLoaderHf.className.baseVal = "flow-line flow-active-onnx";
+                    expText.innerText = "Transformers.jsが起動。HuggingFaceから日本語・多言語対応ONNXモデル（Xenova/paraphrase-multilingual-MiniLM-L12-v2）をDLし、メモリにロード。";
+                    
+                    // Highlight the ONNX model loader card strongly + Hugging Face
+                    applyCardFocus(['card-background', 'card-hf', 'focus-onnx'], {
+                        'sub-model': '#f97316'
+                    });
+                    break;
+
+                case 6: // Embedding Generation (WASM) - Highlight Model Loader Card explicitly
+                    linePanelBg.className.baseVal = "flow-line flow-active-search";
+                    lineManagerLoader.className.baseVal = "flow-line flow-active-onnx";
+                    lineSearchLoader.className.baseVal = "flow-line flow-active-onnx";
+                    expText.innerText = "ここがシステムの心臓部です。ONNX Runtime Webが多言語対応モデルを用い、クエリテキストを384次元の高精度な多言語ベクトル空間に推論変換します。";
+                    
+                    // Focus ONLY on Background Card (explicitly the ONNX card itself)
+                    applyCardFocus(['card-background', 'focus-onnx'], {
+                        'sub-model': '#f97316'
+                    });
+                    break;
+
+                case 7: // Search Engine Drive
+                    lineSearchDb.className.baseVal = "flow-line flow-active-search";
+                    expText.innerText = "Search Engineが始動。IndexedDB内の全データに対し、キーワード部分一致（BM25）と、384次元ベクトルのコサイン類似度（多言語セマンティック）をミリ秒単位で総当たり演算します。";
+                    
+                    applyCardFocus(['card-background', 'card-db'], {
+                        'sub-search': '#38bdf8'
+                    });
+                    break;
+
+                case 8: // RRF Rank Fusion
+                    expText.innerText = "BM25とSemanticの2つの検索エンジンの強みを合わせるため、相互ランク融合（RRF）で、日本語の表記揺れや一致度のバランスを取った最適結果に並び替えます。";
+                    
+                    applyCardFocus(['card-background'], {
+                        'sub-search': '#38bdf8'
+                    });
+                    break;
+
+                case 9: // Result Rendering to UI
+                    linePanelBg.className.baseVal = "flow-line flow-active-search";
+                    expText.innerText = "並び替えられた上位10件 of Issueレコードとラベルのバッジが、Side Panelへメッセージングを介して送信され、ブラウザ画面にリアルタイム描写されます。";
+                    
+                    applyCardFocus(['card-sidepanel', 'card-background'], {
+                        'node-ui-render': '#10b981',
+                        'sub-search': '#38bdf8'
+                    });
+                    break;
+            }
+        }
+
+        // Calculate Responsive SVG connector lines
+        function calculateConnections() {
+            const svg = document.getElementById('connections-svg');
+            const panelCard = document.getElementById('card-sidepanel');
+            const bgCard = document.getElementById('card-background');
+            const dbCard = document.getElementById('card-db');
+            
+            const subSync = document.getElementById('sub-sync');
+            const subModel = document.getElementById('sub-model');
+            const subSearch = document.getElementById('sub-search');
+            
+            const githubCard = document.getElementById('card-github');
+            const hfCard = document.getElementById('card-hf');
+
+            if (!panelCard || !bgCard || !dbCard) return;
+
+            const svgRect = svg.getBoundingClientRect();
+
+            const getCenter = (el) => {
+                const r = el.getBoundingClientRect();
+                return {
+                    x: r.left - svgRect.left + r.width / 2,
+                    y: r.top - svgRect.top + r.height / 2,
+                    left: r.left - svgRect.left,
+                    right: r.right - svgRect.left,
+                    top: r.top - svgRect.top,
+                    bottom: r.bottom - svgRect.top,
+                    width: r.width,
+                    height: r.height
+                };
+            };
+
+            const p = getCenter(panelCard);
+            const bg = getCenter(bgCard);
+            const db = getCenter(dbCard);
+            const sync = getCenter(subSync);
+            const model = getCenter(subModel);
+            const search = getCenter(subSearch);
+            const git = getCenter(githubCard);
+            const hf = getCenter(hfCard);
+
+            // Set responsive SVG paths
+            // 1. Side Panel <--> Background
+            document.getElementById('line-panel-background').setAttribute('d', 
+                `M ${p.right} ${p.top + p.height/3} H ${bg.left}`
+            );
+
+            // 2. Sync Manager -> GitHub API
+            document.getElementById('line-sync-github').setAttribute('d', 
+                `M ${sync.right} ${sync.y} 
+                 H ${bg.right + 20} 
+                 V ${bg.top - 20} 
+                 H ${p.left - 20} 
+                 V ${git.top + git.height/2} 
+                 H ${git.left}`
+            );
+
+            // 3. Model Loader -> HF CDN
+            document.getElementById('line-loader-hf').setAttribute('d', 
+                `M ${model.right} ${model.y} H ${hf.left}`
+            );
+
+            // 4. Sync Manager -> IndexedDB
+            document.getElementById('line-sync-db').setAttribute('d', 
+                `M ${sync.right} ${sync.y} 
+                 H ${bg.right + 10} 
+                 V ${db.y} 
+                 H ${db.right}`
+            );
+
+            // 5. Search Engine <--> IndexedDB
+            document.getElementById('line-search-db').setAttribute('d', 
+                `M ${search.x} ${search.bottom} V ${db.top}`
+            );
+
+            // 6. Connectors inside background script
+            document.getElementById('line-manager-loader').setAttribute('d', 
+                `M ${sync.x} ${sync.bottom} V ${model.top}`
+            );
+            document.getElementById('line-search-loader').setAttribute('d', 
+                `M ${search.x} ${search.top} V ${model.bottom}`
+            );
+        }
+
+        // On Load and Window Resize Actions
+        window.addEventListener('load', () => {
+            calculateConnections();
+            // Start with everything fully visible and unselected (ideal for general explanation first)
+            resetToDefaultState();
+        });
+        window.addEventListener('resize', calculateConnections);
+    </script>
+</body>
+</html>
